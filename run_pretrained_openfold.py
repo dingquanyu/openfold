@@ -135,6 +135,51 @@ def generate_feature_dict(
 def list_files_with_extensions(dir, extensions):
     return [f for f in os.listdir(dir) if f.endswith(extensions)]
 
+def create_general_args(config_preset:str,
+                        long_sequence_inference:bool,model_device:str,
+                        openfold_checkpoint_path:str,
+                        jax_param_path:str,output_dir:str):
+    """Store general input arguments"""
+    from dataclasses import dataclass
+    @dataclass
+    class Args:
+        config_preset : str
+        long_sequence_inference: bool
+        model_device: str
+        openfold_checkpoint_path: str
+        jax_param_path: str
+        output_dir: str
+    
+    args = Args(config_preset,
+                long_sequence_inference,model_device,
+                openfold_checkpoint_path,jax_param_path,output_dir)
+    return args
+
+def create_model_config(args):
+    """Create necessary configurations to initialise models"""
+    config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference)
+
+    if(args.trace_model):
+        if(not config.data.predict.fixed_size):
+            raise ValueError(
+                "Tracing requires that fixed_size mode be enabled in the config"
+            )
+    return config 
+
+def create_model_generator(config,args):
+    """Set up model runners"""
+    model_generator = load_models_from_command_line(
+        config,
+        args.model_device,
+        args.openfold_checkpoint_path,
+        args.jax_param_path,
+        args.output_dir)
+    
+    return model_generator
+
+
+def open_fold_predict():
+
 
 def main(args):
     # Create the output directory
