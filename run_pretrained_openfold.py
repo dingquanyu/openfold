@@ -187,7 +187,7 @@ def create_model_generator(config,args):
     
     return model_generator
 
-def preprocess_feature_dict(feature_dict,config):
+def preprocess_feature_dict(feature_dict,config,args):
     feature_processor = feature_pipeline.FeaturePipeline(config.data)
     processed_feature_dict = feature_processor.process_features(
                 feature_dict, mode='predict',

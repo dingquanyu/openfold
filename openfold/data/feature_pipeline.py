@@ -21,7 +21,8 @@ import numpy as np
 import torch
 
 from openfold.data import input_pipeline
-
+import logging
+logger = logging.getLogger(__name__)
 
 FeatureDict = Mapping[str, np.ndarray]
 TensorDict = Dict[str, torch.Tensor]
@@ -71,11 +72,12 @@ def make_data_config(
 
 
 def np_example_to_features(
-    np_example: FeatureDict,
+    np_example: dict,
     config: ml_collections.ConfigDict,
     mode: str,
 ):
-    np_example = dict(np_example)
+    # np_example = dict(np_example)
+    logger.info("now process feature dict")
     num_res = int(np_example["seq_length"][0])
     cfg, feature_names = make_data_config(config, mode=mode, num_res=num_res)
 

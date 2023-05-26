@@ -25,6 +25,8 @@ from openfold.data.templates import get_custom_template_features
 from openfold.data.tools import jackhmmer, hhblits, hhsearch
 from openfold.data.tools.utils import to_date 
 from openfold.np import residue_constants, protein
+import logging
+logger = logging.getLogger(__name__)
 
 
 FeatureDict = Mapping[str, np.ndarray]
