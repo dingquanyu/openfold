@@ -663,7 +663,7 @@ class TemplatePairEmbedderMultimer(nn.Module):
         c_z: int,
         c_out: int,
         c_dgram: int,
-        c_aatype: int,
+        c_aatype: int,**kwargs
     ):
         super(TemplatePairEmbedderMultimer, self).__init__()
 
@@ -722,7 +722,7 @@ class TemplatePairEmbedderMultimer(nn.Module):
 class TemplateSingleEmbedderMultimer(nn.Module):
     def __init__(self,
         c_in: int,
-        c_m: int,
+        c_m: int, **kwargs
     ):
         super(TemplateSingleEmbedderMultimer, self).__init__()
         self.template_single_embedder = Linear(c_in, c_m)
@@ -776,7 +776,6 @@ class TemplateSingleEmbedderMultimer(nn.Module):
 class TemplateEmbedderMultimer(nn.Module):
     def __init__(self, config):
         super(TemplateEmbedderMultimer, self).__init__()
-        
         self.config = config
         self.template_pair_embedder = TemplatePairEmbedderMultimer(
             **config["template_pair_embedder"],
