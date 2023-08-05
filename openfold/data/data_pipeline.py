@@ -879,9 +879,9 @@ class DataPipeline:
         num_res = len(input_sequence)
 
         hits = self._parse_template_hit_files(
-            alignment_dir,
-            input_sequence,
-            alignment_index,
+            alignment_dir=alignment_dir,
+            input_sequence=input_sequence,
+            alignment_index=alignment_index,
         )
 
         template_features = make_template_features(
@@ -928,8 +928,9 @@ class DataPipeline:
 
         input_sequence = mmcif.chain_to_seqres[chain_id]
         hits = self._parse_template_hit_files(
-            alignment_dir,
-            alignment_index,input_sequence)
+            alignment_dir=alignment_dir,
+            input_sequence=input_sequence,
+            alignment_index=alignment_index,)
 
         template_features = make_template_features(
             input_sequence,
@@ -976,8 +977,9 @@ class DataPipeline:
         )
 
         hits = self._parse_template_hit_files(
-            alignment_dir,
-            alignment_index,input_sequence
+            alignment_dir=alignment_dir,
+            input_sequence=input_sequence,
+            alignment_index=alignment_index,
         )
 
         template_features = make_template_features(
@@ -1008,8 +1010,9 @@ class DataPipeline:
         core_feats = make_protein_features(protein_object, description)
 
         hits = self._parse_template_hit_files(
-            alignment_dir,
-            alignment_index,input_sequence
+            alignment_dir=alignment_dir,
+            input_sequence=input_sequence,
+            alignment_index=alignment_index,
         )
 
         template_features = make_template_features(
