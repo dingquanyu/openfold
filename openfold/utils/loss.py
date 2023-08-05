@@ -1887,7 +1887,7 @@ def merge_labels(per_asym_residue_index, labels, align):
             cur_num_res = labels[j]['aatype'].shape[-1]
             # to 1-based
             cur_residue_index = per_asym_residue_index[i + 1]
-            if len(v.shape)==0 or "template" in k:
+            if len(v.shape)<=1 or "template" in k or "row_mask" in k :
                 continue
             else:    
                 dimension_to_merge = label.shape.index(cur_num_res) if cur_num_res in label.shape else 0
@@ -2070,7 +2070,7 @@ class AlphaFoldMultimerLoss(AlphaFoldLoss):
         del anchor_true_mask
         gc.collect()
 
-        aligned_true_ca_poses = [ca @ r + x for ca in true_ca_poses]  # apply transforms
+        aligned_true_ca_poses = [ca.to('cuda') @ r.to('cuda') + x.to('cuda') for ca in true_ca_poses]  # apply transforms
         align = greedy_align(
                 batch,
                 per_asym_residue_index,
