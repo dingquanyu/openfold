@@ -284,12 +284,12 @@ class OpenFoldMultimerWrapper(OpenFoldWrapper):
         # Run the model
         outputs = self(all_chain_features)
         # Compute loss
-        loss = self.loss(
-            outputs, (all_chain_features,ground_truth), _return_breakdown=False
+        loss,loss_breakdown = self.loss(
+            outputs, (all_chain_features,ground_truth), _return_breakdown=True
         )
 
         # Log it
-        self._log(loss, all_chain_features, outputs)
+        self._log(loss_breakdown, all_chain_features, outputs)
 
         return loss
     
