@@ -157,6 +157,7 @@ class OpenFoldWrapper(pl.LightningModule):
         all_atom_mask = batch["all_atom_mask"]
     
         # This is super janky for superimposition. Fix later
+        print(f"all_atom_mask[..., None] shape is {all_atom_mask[..., None].shape} and gt_coords shape is {gt_coords.shape}")
         gt_coords_masked = gt_coords * all_atom_mask[..., None]
         pred_coords_masked = pred_coords * all_atom_mask[..., None]
         ca_pos = residue_constants.atom_order["CA"]
@@ -273,6 +274,63 @@ class OpenFoldMultimerWrapper(OpenFoldWrapper):
         self.cached_weights = None
         self.last_lr_step = -1
 
+    def _compute_validation_metrics(self, 
+        batch, 
+        outputs, 
+        superimposition_metrics=False
+    ):
+        metrics = {}
+        
+        gt_coords = batch["all_atom_positions"][...,-1]
+        pred_coords = outputs["final_atom_positions"]
+        all_atom_mask = batch["all_atom_mask"][...,-1]
+        all_atom_mask = all_atom_mask.unsqueeze(-1).expand(*all_atom_mask.shape,3)
+        # In the case of multimer training, no need to introduce an empty dimension to all_atom_mask
+        ca_pos = residue_constants.atom_order["CA"]
+        gt_coords_masked = gt_coords*all_atom_mask
+        gt_coords_masked_ca = gt_coords_masked[...,ca_pos,:]
+        gt_coords_masked=None
+
+        pred_coords_masked = pred_coords*all_atom_mask
+        pred_coords_masked_ca = pred_coords_masked[...,ca_pos,:]
+        pred_coords_masked=None
+        all_atom_mask_ca = all_atom_mask[..., ca_pos]
+        ca_pos=None
+    
+        lddt_ca_score = lddt_ca(
+            pred_coords,
+            gt_coords,
+            all_atom_mask,
+            eps=self.config.globals.eps,
+            per_residue=False,
+        )
+        all_atom_mask=None
+        metrics["lddt_ca"] = lddt_ca_score
+   
+        drmsd_ca_score = drmsd(
+            pred_coords_masked_ca,
+            gt_coords_masked_ca,
+            mask=all_atom_mask_ca, # still required here to compute n
+        )
+   
+        metrics["drmsd_ca"] = drmsd_ca_score
+    
+        if(superimposition_metrics):
+            superimposed_pred, alignment_rmsd = superimpose(
+                gt_coords_masked_ca, pred_coords_masked_ca, all_atom_mask_ca,
+            )
+            gdt_ts_score = gdt_ts(
+                superimposed_pred, gt_coords_masked_ca, all_atom_mask_ca
+            )
+            gdt_ha_score = gdt_ha(
+                superimposed_pred, gt_coords_masked_ca, all_atom_mask_ca
+            )
+            all_atom_mask_ca = None
+            metrics["alignment_rmsd"] = alignment_rmsd
+            metrics["gdt_ts"] = gdt_ts_score
+            metrics["gdt_ha"] = gdt_ha_score
+    
+        return metrics
     def forward(self, batch):
         return self.model(batch)
 
