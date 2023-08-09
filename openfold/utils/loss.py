@@ -467,6 +467,7 @@ def lddt(
             dim=-1,
         )
     )
+
     dists_to_score = (
         (dmat_true < cutoff)
         * all_atom_mask
@@ -490,7 +491,6 @@ def lddt(
 
     return score
 
-
 def lddt_ca(
     all_atom_pred_pos: torch.Tensor,
     all_atom_positions: torch.Tensor,
@@ -504,6 +504,29 @@ def lddt_ca(
     all_atom_positions = all_atom_positions[..., ca_pos, :]
     all_atom_mask = all_atom_mask[..., ca_pos : (ca_pos + 1)]  # keep dim
 
+
+    return lddt(
+        all_atom_pred_pos,
+        all_atom_positions,
+        all_atom_mask,
+        cutoff=cutoff,
+        eps=eps,
+        per_residue=per_residue,
+    )
+
+def lddt_ca_multimer(
+    all_atom_pred_pos: torch.Tensor,
+    all_atom_positions: torch.Tensor,
+    all_atom_mask: torch.Tensor,
+    cutoff: float = 15.0,
+    eps: float = 1e-10,
+    per_residue: bool = True,
+) -> torch.Tensor:
+    ca_pos = residue_constants.atom_order["CA"]
+    all_atom_pred_pos = all_atom_pred_pos[..., ca_pos, :]
+    all_atom_positions = all_atom_positions[..., ca_pos, :]
+    all_atom_mask = all_atom_mask[..., ca_pos,-1]
+    all_atom_mask = all_atom_mask[..., None] - all_atom_mask[..., None, :]
     return lddt(
         all_atom_pred_pos,
         all_atom_positions,
@@ -1010,7 +1033,7 @@ def between_residue_clash_loss(
         residue_index.detach().to('cpu').numpy()[..., :, None, None, None]
         < residue_index.detach().to('cpu').numpy()[..., None, :, None, None]
     )
-    
+
     # Backbone C--N bond between subsequent residues is no clash.
     c_one_hot = torch.nn.functional.one_hot(
         residue_index.new_tensor(2), num_classes=14
