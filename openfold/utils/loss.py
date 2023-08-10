@@ -237,7 +237,6 @@ def backbone_loss(
 
     # Average over the batch dimension
     fape_loss = torch.mean(fape_loss)
-
     return fape_loss
 
 
@@ -310,10 +309,10 @@ def fape_loss(
         interface_bb_loss = backbone_loss(
             traj=traj,
             pair_mask=1. - intra_chain_mask,
-            **{**batch, **config.interface},
+            **{**batch, **config.interface_backbone},
         )
         weighted_bb_loss = (intra_chain_bb_loss * config.intra_chain_backbone.weight
-                            + interface_bb_loss * config.interface.weight)
+                            + interface_bb_loss * config.interface_backbone.weight)
     else:
         bb_loss = backbone_loss(
             traj=traj,
@@ -467,6 +466,7 @@ def lddt(
             dim=-1,
         )
     )
+
     dists_to_score = (
         (dmat_true < cutoff)
         * all_atom_mask
@@ -490,7 +490,6 @@ def lddt(
 
     return score
 
-
 def lddt_ca(
     all_atom_pred_pos: torch.Tensor,
     all_atom_positions: torch.Tensor,
@@ -504,6 +503,29 @@ def lddt_ca(
     all_atom_positions = all_atom_positions[..., ca_pos, :]
     all_atom_mask = all_atom_mask[..., ca_pos : (ca_pos + 1)]  # keep dim
 
+
+    return lddt(
+        all_atom_pred_pos,
+        all_atom_positions,
+        all_atom_mask,
+        cutoff=cutoff,
+        eps=eps,
+        per_residue=per_residue,
+    )
+
+def lddt_ca_multimer(
+    all_atom_pred_pos: torch.Tensor,
+    all_atom_positions: torch.Tensor,
+    all_atom_mask: torch.Tensor,
+    cutoff: float = 15.0,
+    eps: float = 1e-10,
+    per_residue: bool = True,
+) -> torch.Tensor:
+    ca_pos = residue_constants.atom_order["CA"]
+    all_atom_pred_pos = all_atom_pred_pos[..., ca_pos, :]
+    all_atom_positions = all_atom_positions[..., ca_pos, :]
+    all_atom_mask = all_atom_mask[..., ca_pos,-1]
+    all_atom_mask = all_atom_mask[..., None] - all_atom_mask[..., None, :]
     return lddt(
         all_atom_pred_pos,
         all_atom_positions,
@@ -982,31 +1004,33 @@ def between_residue_clash_loss(
     fp_type = atom14_pred_positions.dtype
     # Create the distance matrix.
     # (N, N, 14, 14)
-    dists = torch.sqrt(
+    atom14_pred_positions = atom14_pred_positions.detach().to('cpu').numpy()
+    dists = np.sqrt(
         eps
-        + torch.sum(
+        + np.sum(
             (
                 atom14_pred_positions[..., :, None, :, None, :]
                 - atom14_pred_positions[..., None, :, None, :, :]
             )
             ** 2,
-            dim=-1,
+            axis=-1,
         )
     )
-
+    
     # Create the mask for valid distances.
     # shape (N, N, 14, 14)
+    atom14_atom_exists = atom14_atom_exists.detach().to('cpu').numpy().astype(int)
     dists_mask = (
         atom14_atom_exists[..., :, None, :, None]
         * atom14_atom_exists[..., None, :, None, :]
-    ).type(fp_type)
+    )
 
     # Mask out all the duplicate entries in the lower triangular matrix.
     # Also mask out the diagonal (atom-pairs from the same residue) -- these atoms
     # are handled separately.
     dists_mask = dists_mask * (
-        residue_index[..., :, None, None, None]
-        < residue_index[..., None, :, None, None]
+        residue_index.detach().to('cpu').numpy()[..., :, None, None, None]
+        < residue_index.detach().to('cpu').numpy()[..., None, :, None, None]
     )
 
     # Backbone C--N bond between subsequent residues is no clash.
@@ -1030,13 +1054,16 @@ def between_residue_clash_loss(
     if asym_id is not None:
         neighbour_mask = neighbour_mask & (asym_id[..., :, None] == asym_id[..., None, :])
 
-    neighbour_mask = neighbour_mask[..., None, None]
+    neighbour_mask = neighbour_mask.detach().to('cpu').numpy()[..., None, None]
 
     c_n_bonds = (
         neighbour_mask
-        * c_one_hot[..., None, None, :, None]
-        * n_one_hot[..., None, None, None, :]
+        * c_one_hot.detach().to('cpu').numpy()[..., None, None, :, None]
+        * n_one_hot.detach().to('cpu').numpy()[..., None, None, None, :]
     )
+    neighbour_mask = None
+    c_one_hot = None
+    n_one_hot = None
     dists_mask = dists_mask * (1.0 - c_n_bonds)
 
     # Disulfide bridge between two cysteines is no clash.
@@ -1048,24 +1075,27 @@ def between_residue_clash_loss(
     ).squeeze(-1)
     cys_sg_one_hot = torch.nn.functional.one_hot(cys_sg_idx, num_classes=14)
     disulfide_bonds = (
-        cys_sg_one_hot[..., None, None, :, None]
-        * cys_sg_one_hot[..., None, None, None, :]
+        cys_sg_one_hot.detach().to('cpu').numpy()[..., None, None, :, None]
+        * cys_sg_one_hot.detach().to('cpu').numpy()[..., None, None, None, :]
     )
     dists_mask = dists_mask * (1.0 - disulfide_bonds)
 
     # Compute the lower bound for the allowed distances.
     # shape (N, N, 14, 14)
     dists_lower_bound = dists_mask * (
-        atom14_atom_radius[..., :, None, :, None]
-        + atom14_atom_radius[..., None, :, None, :]
+        atom14_atom_radius.detach().to('cpu').numpy()[..., :, None, :, None]
+        + atom14_atom_radius.detach().to('cpu').numpy()[..., None, :, None, :]
     )
 
     # Compute the error.
     # shape (N, N, 14, 14)
+    input = dists_lower_bound - overlap_tolerance_soft - dists
+    input = torch.tensor(input,device='cuda')
+    dists_mask = torch.tensor(dists_mask,device='cuda')
     dists_to_low_error = dists_mask * torch.nn.functional.relu(
-        dists_lower_bound - overlap_tolerance_soft - dists
+        input
     )
-
+    input=None
     # Compute the mean loss.
     # shape ()
     mean_loss = torch.sum(dists_to_low_error) / (1e-6 + torch.sum(dists_mask))
@@ -1078,9 +1108,16 @@ def between_residue_clash_loss(
 
     # Compute the hard clash mask.
     # shape (N, N, 14, 14)
+    dists_lower_bound = torch.tensor(dists_lower_bound,device='cuda')
+    overlap_tolerance_hard = torch.tensor(overlap_tolerance_hard,device='cuda')
+    dists = torch.tensor(dists,device='cuda')
+    dists_mask = torch.tensor(dists_mask,device='cuda')
     clash_mask = dists_mask * (
             dists < (dists_lower_bound - overlap_tolerance_hard)
     )
+    dists_lower_bound=None
+    overlap_tolerance_hard=None
+    dists=None
 
     per_atom_num_clash = torch.sum(clash_mask, dim=(-4, -2)) + torch.sum(clash_mask, dim=(-3, -1))
 
@@ -1233,7 +1270,6 @@ def find_structural_violations(
             batch["atom14_atom_exists"]
             * atomtype_radius[batch["residx_atom14_to_atom37"]]
         )
-    torch.cuda.memory_summary()
     # Compute the between residue clash loss.
     between_residue_clashes = between_residue_clash_loss(
         atom14_pred_positions=atom14_pred_positions,
@@ -1594,7 +1630,7 @@ def experimentally_resolved_loss(
     )
 
     loss = torch.mean(loss)
- 
+
     return loss
 
 
@@ -1887,15 +1923,20 @@ def merge_labels(per_asym_residue_index, labels, align):
             cur_num_res = labels[j]['aatype'].shape[-1]
             # to 1-based
             cur_residue_index = per_asym_residue_index[i + 1]
-            if len(v.shape)==0 or "template" in k:
+            if len(v.shape)<=1 or "template" in k or "row_mask" in k :
                 continue
             else:    
                 dimension_to_merge = label.shape.index(cur_num_res) if cur_num_res in label.shape else 0
-                cur_out[i] = label.index_select(dimension_to_merge,cur_residue_index)
+                if k =='all_atom_positions':
+                    dimension_to_merge=1 
+                cur_out[i] = label.to('cuda').index_select(dimension_to_merge,cur_residue_index)
+                label= None
+                cur_residue_index=None
         cur_out = [x[1] for x in sorted(cur_out.items())]
         if len(cur_out)>0:
             new_v = torch.concat(cur_out, dim=dimension_to_merge)
             outs[k] = new_v
+    labels = None
     return outs
 
 
@@ -2017,7 +2058,7 @@ class AlphaFoldMultimerLoss(AlphaFoldLoss):
         super(AlphaFoldMultimerLoss, self).__init__(config)
         self.config = config
 
-    def multi_chain_perm_align(self,out, batch, labels, shuffle_times=2):
+    def multi_chain_perm_align(self,out, batch, labels,permutate_chains=True):
         """
         A class method that first permutate chains in ground truth first
         before calculating the loss.
@@ -2030,10 +2071,10 @@ class AlphaFoldMultimerLoss(AlphaFoldLoss):
         pred_ca_pos = out["final_atom_positions"][..., ca_idx, :].float()  # [bsz, nres, 3]
         pred_ca_mask = out["final_atom_mask"][..., ca_idx].float()  # [bsz, nres]
         true_ca_poses = [
-            l["all_atom_positions"][..., ca_idx, :].float() for l in labels
+            l["all_atom_positions"][..., ca_idx, :].to('cuda').float() for l in labels
         ]  # list([nres, 3])
         true_ca_masks = [
-            l["all_atom_mask"][..., ca_idx].float() for l in labels
+            l["all_atom_mask"][..., ca_idx].to('cuda').int() for l in labels
         ]  # list([nres,])
         unique_asym_ids = torch.unique(batch["asym_id"])
 
@@ -2041,53 +2082,57 @@ class AlphaFoldMultimerLoss(AlphaFoldLoss):
         for cur_asym_id in unique_asym_ids:
             asym_mask = (batch["asym_id"] == cur_asym_id).bool()
             per_asym_residue_index[int(cur_asym_id)] = torch.masked_select(batch["residue_index"],asym_mask)
+        if permutate_chains:
+            anchor_gt_asym, anchor_pred_asym = get_least_asym_entity_or_longest_length(batch)
+            anchor_gt_idx = int(anchor_gt_asym) - 1
 
-        anchor_gt_asym, anchor_pred_asym = get_least_asym_entity_or_longest_length(batch)
-        anchor_gt_idx = int(anchor_gt_asym) - 1
-
-        unique_entity_ids = torch.unique(batch["entity_id"])
-        entity_2_asym_list = {}
-        for cur_ent_id in unique_entity_ids:
-            ent_mask = batch["entity_id"] == cur_ent_id
-            cur_asym_id = torch.unique(batch["asym_id"][ent_mask])
-            entity_2_asym_list[int(cur_ent_id)] = cur_asym_id
-        asym_mask = (batch["asym_id"] == anchor_pred_asym).bool()
-        anchor_residue_idx = per_asym_residue_index[int(anchor_pred_asym)]
-        anchor_true_pos = torch.index_select(true_ca_poses[anchor_gt_idx],1,anchor_residue_idx)
-        anchor_pred_pos = pred_ca_pos[0][asym_mask[0]]
-        
-        # anchor_pred_pos = anchor_pred_pos.to('cuda')
-        anchor_true_mask = torch.index_select(true_ca_masks[anchor_gt_idx],1,anchor_residue_idx)
-        anchor_pred_mask =pred_ca_mask[0][asym_mask[0]]
-        # anchor_pred_mask = anchor_pred_mask.to('cuda')
-        input_mask = (anchor_true_mask * anchor_pred_mask).bool()
-        r, x = get_optimal_transform(
-            anchor_pred_pos,anchor_true_pos[0],
-            mask=input_mask[0]
-        )
-        del input_mask # just to save memory
-        del anchor_pred_mask
-        del anchor_true_mask
-        gc.collect()
-
-        aligned_true_ca_poses = [ca @ r + x for ca in true_ca_poses]  # apply transforms
-        align = greedy_align(
-                batch,
-                per_asym_residue_index,
-                unique_asym_ids ,
-                entity_2_asym_list,
-                pred_ca_pos,
-                pred_ca_mask,
-                aligned_true_ca_poses,
-                true_ca_masks,
+            unique_entity_ids = torch.unique(batch["entity_id"])
+            entity_2_asym_list = {}
+            for cur_ent_id in unique_entity_ids:
+                ent_mask = batch["entity_id"] == cur_ent_id
+                cur_asym_id = torch.unique(batch["asym_id"][ent_mask])
+                entity_2_asym_list[int(cur_ent_id)] = cur_asym_id
+            asym_mask = (batch["asym_id"] == anchor_pred_asym).bool()
+            anchor_residue_idx = per_asym_residue_index[int(anchor_pred_asym)]
+            anchor_true_pos = torch.index_select(true_ca_poses[anchor_gt_idx],1,anchor_residue_idx)
+            anchor_pred_pos = pred_ca_pos[0][asym_mask[0]]
+            
+            # anchor_pred_pos = anchor_pred_pos.to('cuda')
+            anchor_true_mask = torch.index_select(true_ca_masks[anchor_gt_idx],1,anchor_residue_idx)
+            anchor_pred_mask =pred_ca_mask[0][asym_mask[0]]
+            # anchor_pred_mask = anchor_pred_mask.to('cuda')
+            input_mask = (anchor_true_mask * anchor_pred_mask).bool()
+            r, x = get_optimal_transform(
+                anchor_pred_pos,anchor_true_pos[0],
+                mask=input_mask[0]
             )
-        
-        del aligned_true_ca_poses
-        del r,x
-        del pred_ca_pos,pred_ca_mask,true_ca_poses,true_ca_masks
-        del anchor_pred_pos,anchor_true_pos
-        gc.collect()
-        print(f"finished multi-chain permutation and final align is {align}")
+            del input_mask # just to save memory
+            del anchor_pred_mask
+            del anchor_true_mask
+            gc.collect()
+
+            aligned_true_ca_poses = [ca.to('cuda') @ r.to('cuda') + x.to('cuda') for ca in true_ca_poses]  # apply transforms
+            del true_ca_poses
+            gc.collect()
+            align = greedy_align(
+                    batch,
+                    per_asym_residue_index,
+                    unique_asym_ids ,
+                    entity_2_asym_list,
+                    pred_ca_pos,
+                    pred_ca_mask,
+                    aligned_true_ca_poses,
+                    true_ca_masks,
+                )
+            
+            del aligned_true_ca_poses,true_ca_masks
+            del r,x
+            del pred_ca_pos,pred_ca_mask
+            del anchor_pred_pos,anchor_true_pos
+            gc.collect()
+            print(f"finished multi-chain permutation and final align is {align}")
+        else:
+            align = list(enumerate(range(len(labels))))
         merged_labels = merge_labels(
             per_asym_residue_index,
             labels,
@@ -2096,7 +2141,7 @@ class AlphaFoldMultimerLoss(AlphaFoldLoss):
                 
         return merged_labels
 
-    def forward(self,out,batch,_return_breakdown=False):
+    def forward(self,out,batch,_return_breakdown=False,permutate_chains=True):
         """
         Overwrite AlphaFoldLoss forward function so that
         it first compute multi-chain permutation 
@@ -2110,11 +2155,10 @@ class AlphaFoldMultimerLoss(AlphaFoldLoss):
         features = tensor_tree_map(lambda t: t[..., -1], features)
         features['resolution'] = labels[0]['resolution']
         # then permutate ground truth chains before calculating the loss
-        permutated_labels = self.multi_chain_perm_align(out,features,labels)
+        permutated_labels = self.multi_chain_perm_align(out,features,labels,permutate_chains=permutate_chains)
         permutated_labels.pop('aatype')
         features.update(permutated_labels)
-        move_to_cpu = lambda t: (t.to('cpu'))
-        # features = tensor_tree_map(move_to_cpu,features)
+            
         if (not _return_breakdown):
             cum_loss = self.loss(out,features,_return_breakdown)
             print(f"cum_loss: {cum_loss}")
