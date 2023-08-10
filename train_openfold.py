@@ -27,7 +27,7 @@ from openfold.utils.callbacks import (
     EarlyStoppingVerbose,
 )
 from openfold.utils.exponential_moving_average import ExponentialMovingAverage
-from openfold.utils.loss import AlphaFoldLoss, AlphaFoldMultimerLoss,lddt_ca
+from openfold.utils.loss import AlphaFoldLoss, AlphaFoldMultimerLoss,lddt_ca,lddt_ca_multimer
 from openfold.utils.lr_schedulers import AlphaFoldLRScheduler
 from openfold.utils.seed import seed_everything
 from openfold.utils.superimposition import superimpose
@@ -157,7 +157,6 @@ class OpenFoldWrapper(pl.LightningModule):
         all_atom_mask = batch["all_atom_mask"]
     
         # This is super janky for superimposition. Fix later
-        print(f"all_atom_mask[..., None] shape is {all_atom_mask[..., None].shape} and gt_coords shape is {gt_coords.shape}")
         gt_coords_masked = gt_coords * all_atom_mask[..., None]
         pred_coords_masked = pred_coords * all_atom_mask[..., None]
         ca_pos = residue_constants.atom_order["CA"]
@@ -294,10 +293,10 @@ class OpenFoldMultimerWrapper(OpenFoldWrapper):
         pred_coords_masked = pred_coords*all_atom_mask
         pred_coords_masked_ca = pred_coords_masked[...,ca_pos,:]
         pred_coords_masked=None
-        all_atom_mask_ca = all_atom_mask[..., ca_pos]
+        all_atom_mask_ca = all_atom_mask[..., ca_pos,-1]
         ca_pos=None
     
-        lddt_ca_score = lddt_ca(
+        lddt_ca_score = lddt_ca_multimer(
             pred_coords,
             gt_coords,
             all_atom_mask,

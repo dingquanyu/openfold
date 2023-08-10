@@ -237,7 +237,6 @@ def backbone_loss(
 
     # Average over the batch dimension
     fape_loss = torch.mean(fape_loss)
-
     return fape_loss
 
 
@@ -1631,7 +1630,7 @@ def experimentally_resolved_loss(
     )
 
     loss = torch.mean(loss)
- 
+
     return loss
 
 
@@ -2059,7 +2058,7 @@ class AlphaFoldMultimerLoss(AlphaFoldLoss):
         super(AlphaFoldMultimerLoss, self).__init__(config)
         self.config = config
 
-    def multi_chain_perm_align(self,out, batch, labels, shuffle_times=2):
+    def multi_chain_perm_align(self,out, batch, labels,permutate_chains=True):
         """
         A class method that first permutate chains in ground truth first
         before calculating the loss.
@@ -2083,55 +2082,57 @@ class AlphaFoldMultimerLoss(AlphaFoldLoss):
         for cur_asym_id in unique_asym_ids:
             asym_mask = (batch["asym_id"] == cur_asym_id).bool()
             per_asym_residue_index[int(cur_asym_id)] = torch.masked_select(batch["residue_index"],asym_mask)
+        if permutate_chains:
+            anchor_gt_asym, anchor_pred_asym = get_least_asym_entity_or_longest_length(batch)
+            anchor_gt_idx = int(anchor_gt_asym) - 1
 
-        anchor_gt_asym, anchor_pred_asym = get_least_asym_entity_or_longest_length(batch)
-        anchor_gt_idx = int(anchor_gt_asym) - 1
-
-        unique_entity_ids = torch.unique(batch["entity_id"])
-        entity_2_asym_list = {}
-        for cur_ent_id in unique_entity_ids:
-            ent_mask = batch["entity_id"] == cur_ent_id
-            cur_asym_id = torch.unique(batch["asym_id"][ent_mask])
-            entity_2_asym_list[int(cur_ent_id)] = cur_asym_id
-        asym_mask = (batch["asym_id"] == anchor_pred_asym).bool()
-        anchor_residue_idx = per_asym_residue_index[int(anchor_pred_asym)]
-        anchor_true_pos = torch.index_select(true_ca_poses[anchor_gt_idx],1,anchor_residue_idx)
-        anchor_pred_pos = pred_ca_pos[0][asym_mask[0]]
-        
-        # anchor_pred_pos = anchor_pred_pos.to('cuda')
-        anchor_true_mask = torch.index_select(true_ca_masks[anchor_gt_idx],1,anchor_residue_idx)
-        anchor_pred_mask =pred_ca_mask[0][asym_mask[0]]
-        # anchor_pred_mask = anchor_pred_mask.to('cuda')
-        input_mask = (anchor_true_mask * anchor_pred_mask).bool()
-        r, x = get_optimal_transform(
-            anchor_pred_pos,anchor_true_pos[0],
-            mask=input_mask[0]
-        )
-        del input_mask # just to save memory
-        del anchor_pred_mask
-        del anchor_true_mask
-        gc.collect()
-
-        aligned_true_ca_poses = [ca.to('cuda') @ r.to('cuda') + x.to('cuda') for ca in true_ca_poses]  # apply transforms
-        del true_ca_poses
-        gc.collect()
-        align = greedy_align(
-                batch,
-                per_asym_residue_index,
-                unique_asym_ids ,
-                entity_2_asym_list,
-                pred_ca_pos,
-                pred_ca_mask,
-                aligned_true_ca_poses,
-                true_ca_masks,
+            unique_entity_ids = torch.unique(batch["entity_id"])
+            entity_2_asym_list = {}
+            for cur_ent_id in unique_entity_ids:
+                ent_mask = batch["entity_id"] == cur_ent_id
+                cur_asym_id = torch.unique(batch["asym_id"][ent_mask])
+                entity_2_asym_list[int(cur_ent_id)] = cur_asym_id
+            asym_mask = (batch["asym_id"] == anchor_pred_asym).bool()
+            anchor_residue_idx = per_asym_residue_index[int(anchor_pred_asym)]
+            anchor_true_pos = torch.index_select(true_ca_poses[anchor_gt_idx],1,anchor_residue_idx)
+            anchor_pred_pos = pred_ca_pos[0][asym_mask[0]]
+            
+            # anchor_pred_pos = anchor_pred_pos.to('cuda')
+            anchor_true_mask = torch.index_select(true_ca_masks[anchor_gt_idx],1,anchor_residue_idx)
+            anchor_pred_mask =pred_ca_mask[0][asym_mask[0]]
+            # anchor_pred_mask = anchor_pred_mask.to('cuda')
+            input_mask = (anchor_true_mask * anchor_pred_mask).bool()
+            r, x = get_optimal_transform(
+                anchor_pred_pos,anchor_true_pos[0],
+                mask=input_mask[0]
             )
-        
-        del aligned_true_ca_poses,true_ca_masks
-        del r,x
-        del pred_ca_pos,pred_ca_mask
-        del anchor_pred_pos,anchor_true_pos
-        gc.collect()
-        print(f"finished multi-chain permutation and final align is {align}")
+            del input_mask # just to save memory
+            del anchor_pred_mask
+            del anchor_true_mask
+            gc.collect()
+
+            aligned_true_ca_poses = [ca.to('cuda') @ r.to('cuda') + x.to('cuda') for ca in true_ca_poses]  # apply transforms
+            del true_ca_poses
+            gc.collect()
+            align = greedy_align(
+                    batch,
+                    per_asym_residue_index,
+                    unique_asym_ids ,
+                    entity_2_asym_list,
+                    pred_ca_pos,
+                    pred_ca_mask,
+                    aligned_true_ca_poses,
+                    true_ca_masks,
+                )
+            
+            del aligned_true_ca_poses,true_ca_masks
+            del r,x
+            del pred_ca_pos,pred_ca_mask
+            del anchor_pred_pos,anchor_true_pos
+            gc.collect()
+            print(f"finished multi-chain permutation and final align is {align}")
+        else:
+            align = list(enumerate(range(len(labels))))
         merged_labels = merge_labels(
             per_asym_residue_index,
             labels,
@@ -2154,12 +2155,10 @@ class AlphaFoldMultimerLoss(AlphaFoldLoss):
         features = tensor_tree_map(lambda t: t[..., -1], features)
         features['resolution'] = labels[0]['resolution']
         # then permutate ground truth chains before calculating the loss
-        if permutate_chains:
-            permutated_labels = self.multi_chain_perm_align(out,features,labels)
-            permutated_labels.pop('aatype')
-            features.update(permutated_labels)
-        move_to_cpu = lambda t: (t.to('cpu'))
-        # features = tensor_tree_map(move_to_cpu,features)
+        permutated_labels = self.multi_chain_perm_align(out,features,labels,permutate_chains=permutate_chains)
+        permutated_labels.pop('aatype')
+        features.update(permutated_labels)
+            
         if (not _return_breakdown):
             cum_loss = self.loss(out,features,_return_breakdown)
             print(f"cum_loss: {cum_loss}")
