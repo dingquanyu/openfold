@@ -27,6 +27,8 @@ from openfold.data import templates, parsers, mmcif_parsing, msa_identifiers, ms
 from openfold.data.templates import get_custom_template_features, empty_template_feats
 from openfold.data.tools import jackhmmer, hhblits, hhsearch, hmmsearch
 from openfold.np import residue_constants, protein
+import logging
+logger = logging.getLogger(__name__)
 
 FeatureDict = MutableMapping[str, np.ndarray]
 TemplateSearcher = Union[hhsearch.HHSearch, hmmsearch.Hmmsearch]

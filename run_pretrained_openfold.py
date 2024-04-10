@@ -170,6 +170,128 @@ def generate_feature_dict(
 def list_files_with_extensions(dir, extensions):
     return [f for f in os.listdir(dir) if f.endswith(extensions)]
 
+def create_general_args(config_preset:str,
+                        long_sequence_inference:bool,model_device:str,
+                        openfold_checkpoint_path:str,
+                        jax_param_path:str,output_dir:str,
+                        trace_model:bool,subtract_plddt:bool,
+                        multimer_ri_gap:int,save_outputs:bool,skip_relaxation:bool):
+    """Store general input arguments"""
+    from dataclasses import dataclass
+    @dataclass
+    class Args:
+        config_preset : str
+        long_sequence_inference: bool
+        model_device: str
+        openfold_checkpoint_path: str
+        jax_param_path: str
+        output_dir: str
+        trace_model: bool
+        subtract_plddt:bool
+        multimer_ri_gap:int
+        save_outputs:bool
+        skip_relaxation:bool
+    
+    args = Args(config_preset,
+                long_sequence_inference,model_device,
+                openfold_checkpoint_path,jax_param_path,
+                output_dir,trace_model,
+                subtract_plddt,multimer_ri_gap,
+                save_outputs,skip_relaxation)
+    return args
+
+def create_model_config(args):
+    """Create necessary configurations to initialise models"""
+    config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference)
+
+    if(args.trace_model):
+        if(not config.data.predict.fixed_size):
+            raise ValueError(
+                "Tracing requires that fixed_size mode be enabled in the config"
+            )
+    return config 
+
+def create_model_generator(config,args):
+    """Set up model runners"""
+    model_generator = load_models_from_command_line(
+        config,
+        args.model_device,
+        args.openfold_checkpoint_path,
+        args.jax_param_path,
+        args.output_dir)
+    
+    return model_generator
+
+def preprocess_feature_dict(feature_dict,config,args):
+    feature_processor = feature_pipeline.FeaturePipeline(config.data)
+    processed_feature_dict = feature_processor.process_features(
+                feature_dict, mode='predict',
+            )
+
+    processed_feature_dict = {
+                k:torch.as_tensor(v, device=args.model_device)
+                for k,v in processed_feature_dict.items()
+            }
+    return processed_feature_dict,feature_processor
+
+def write_predicted_output(out,feature_dict,
+                           feature_processor,args,
+                           config,output_directory,
+                           output_name):
+    processed_feature_dict = tensor_tree_map(
+                lambda x: np.array(x[..., -1].cpu()),
+                processed_feature_dict
+            )
+    out = tensor_tree_map(lambda x: np.array(x.cpu()), out)
+
+    unrelaxed_protein = prep_output(
+        out,
+        processed_feature_dict,
+        feature_dict,
+        feature_processor,
+        args.config_preset,
+        args.multimer_ri_gap,
+        args.subtract_plddt
+    )
+
+    unrelaxed_file_suffix = "_unrelaxed.pdb"
+    unrelaxed_output_path = os.path.join(
+        output_directory, f'{output_name}{unrelaxed_file_suffix}'
+    )
+
+    with open(unrelaxed_output_path, 'w') as fp:
+        fp.write(protein.to_pdb(unrelaxed_protein))
+
+    logger.info(f"Output written to {unrelaxed_output_path}...")
+
+    if not args.skip_relaxation:
+        # Relax the prediction.
+        logger.info(f"Running relaxation on {unrelaxed_output_path}...")
+        relax_protein(config, args.model_device, unrelaxed_protein, output_directory, output_name, args.cif_output)
+
+    if args.save_outputs:
+        output_dict_path = os.path.join(
+            output_directory, f'{output_name}_output_dict.pkl'
+        )
+        with open(output_dict_path, "wb") as fp:
+            pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
+
+        logger.info(f"Model output written to {output_dict_path}...")
+
+def open_fold_predict(model_generator,processed_feature_dict,args,tag,
+                      feature_dict,feature_processor,config,output_name):
+    """
+    Actual predict part
+    
+    Args:
+    processed_feature_dict: feature_dict from multimeric object after being pre-processed
+    args: general args from create_general_args()
+    tag: name of the multimeric object
+    """
+    for model, output_directory in model_generator:
+        out = run_model(model, processed_feature_dict, tag, args.output_dir)
+        write_predicted_output(out,feature_dict,feature_processor,
+                               args,config,output_directory,output_name)
 
 def main(args):
     # Create the output directory

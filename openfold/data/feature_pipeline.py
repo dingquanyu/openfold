@@ -19,9 +19,9 @@ from typing import Mapping, Tuple, List, Optional, Dict, Sequence
 import ml_collections
 import numpy as np
 import torch
-
 from openfold.data import input_pipeline, input_pipeline_multimer
-
+import logging
+logger = logging.getLogger(__name__)
 
 FeatureDict = Mapping[str, np.ndarray]
 TensorDict = Dict[str, torch.Tensor]
@@ -77,11 +77,13 @@ def make_data_config(
 
 
 def np_example_to_features(
-    np_example: FeatureDict,
+    np_example: dict,
     config: ml_collections.ConfigDict,
     mode: str,
     is_multimer: bool = False
 ):
+    # np_example = dict(np_example)
+    logger.info("now process feature dict")
     np_example = dict(np_example)
 
     seq_length = np_example["seq_length"]
