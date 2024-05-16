@@ -16,14 +16,17 @@
 import random
 from openfold.model.primitives_lora import Linear
 import torch
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+import loralib as lora
 
-class FakeModel(torch.nn.Module):
+class Model(torch.nn.Module):
     """
     A small neural net, pretend to learn a multiclass classification task 
     """
 
     def __init__(self, layer1 : Linear, layer2 : Linear):
-        super(FakeModel, self).__init__()
+        super(Model, self).__init__()
         self.layer1 = layer1
         self.layer2 = layer2
     
@@ -41,7 +44,32 @@ class TestLoRA(unittest.TestCase):
     """
 
     def setUp(self):
-        self.input = torch.rand(34*57).reshape(24, 57)
-        self.layer1 = Linear(in_dim=57, out_dim=21, bias=True)
-        self.layer2 = Linear(in_dim=21, out_dim=6, bias=False)
-        self.ground_truth = [random.choice(range(6)) for _ in range(6)]
+        self.input = torch.rand(100*34*57).reshape(100,24, 57)
+        self.layer1 = Linear(in_dim=57, out_dim=21, bias=True, init="relu")
+        self.layer2 = Linear(in_dim=21, out_dim=6, bias=False, init="final")
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.ground_truth = torch.randint(0, 6, (100,)) 
+    
+    def test1_ForwardPass(self):
+        "Test the forward pass"
+        self.model(self.input)
+    
+    def test2_training(self):
+        "Test training only the LoRA weights"
+        model = Model(self.layer1, self.layer2)
+        dataset = TensorDataset(self.input, self.ground_truth)
+        dataloader = DataLoader(dataset, batch_size=12, shuffle = True)
+        optimiser = optim.Adam(self.model.parameters(), lr=0.001)
+        total_loss = 0.0
+        # just run 1 epoch 
+        lora.mark_only_lora_as_trainable(model, bias='all')
+        for inputs, labels in dataloader:
+            optimiser.zero_grad()
+            outputs = self.model(inputs)
+            loss = self.criterion(outputs, labels)
+            loss.backward()
+            optimiser.step()
+            total_loss += loss.item()
+        epoch_loss = total_loss / len(dataloader)
+        print(f"Loss: {epoch_loss:.4f}")
+        torch.save(lora.lora_state_dict(model, bias='all'), "./test_data/checkpoint.cpt")
